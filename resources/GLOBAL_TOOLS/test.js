@@ -1,321 +1,125 @@
-// 河北石油职业技术大学 拾光课程表适配脚本 (基于作者官方 Fetch 模板)
-
-function scheduleHtmlParser(htmlString) {
-    // 点击“执行导入”时，主动触发作者的主流程
-    runImportFlow();
-    return [];
-}
-
-function mergeAndDistinctCourses(courses) {
-    if (!Array.isArray(courses) || courses.length <= 1) return courses;
-    const list = courses.map(c => ({
-        ...c,
-        name: c.name || '',
-        teacher: c.teacher || '',
-        position: c.position || '',
-        weeks: Array.isArray(c.weeks) ? [...c.weeks].sort((a, b) => a - b) : []
-    }));
-
-    list.sort((a, b) => {
-        return a.name.localeCompare(b.name) ||
-               a.teacher.localeCompare(b.teacher) ||
-               a.position.localeCompare(b.position) ||
-               (a.day || 0) - (b.day || 0) ||
-               a.weeks.join(',').localeCompare(b.weeks.join(',')) ||
-               (a.startSection || 0) - (b.startSection || 0);
-    });
-
-    const step1Merged = [];
-    let current = list[0];
-
-    for (let i = 1; i < list.length; i++) {
-        const next = list[i];
-        const isSameCourseAndWeeks =
-            current.name === next.name &&
-            current.teacher === next.teacher &&
-            current.position === next.position &&
-            current.day === next.day &&
-            current.weeks.join(',') === next.weeks.join(',');
-
-        const isContinuous = current.endSection + 1 === next.startSection;
-        const isDuplicate = current.startSection === next.startSection && current.endSection === next.endSection;
-
-        if (isSameCourseAndWeeks && isContinuous) {
-            current.endSection = next.endSection;
-        } else if (isSameCourseAndWeeks && isDuplicate) {
-            continue;
-        } else {
-            step1Merged.push(current);
-            current = next;
-        }
-    }
-    step1Merged.push(current);
-
-    step1Merged.sort((a, b) => {
-        return a.name.localeCompare(b.name) ||
-               a.teacher.localeCompare(b.teacher) ||
-               a.position.localeCompare(b.position) ||
-               (a.day || 0) - (b.day || 0) ||
-               (a.startSection || 0) - (b.startSection || 0) ||
-               (a.endSection || 0) - (b.endSection || 0);
-    });
-
-    const step2Merged = [];
-    let cur = step1Merged[0];
-
-    for (let i = 1; i < step1Merged.length; i++) {
-        const nxt = step1Merged[i];
-        const isSameCourseAndSection =
-            cur.name === nxt.name &&
-            cur.teacher === nxt.teacher &&
-            cur.position === nxt.position &&
-            cur.day === nxt.day &&
-            cur.startSection === nxt.startSection &&
-            cur.endSection === nxt.endSection;
-
-        if (isSameCourseAndSection) {
-            cur.weeks = Array.from(new Set([...cur.weeks, ...nxt.weeks])).sort((a, b) => a - b);
-        } else {
-            step2Merged.push(cur);
-            cur = nxt;
-        }
-    }
-    step2Merged.push(cur);
-
-    return step2Merged;
-}
+// 通用正方教务系统 (v9.0) 适配脚本
 
 function parseWeeks(weekStr) {
     if (!weekStr) return [];
-    const weekSets = weekStr.split(',');
     let weeks = [];
-
-    for (const set of weekSets) {
-        const trimmedSet = set.trim();
-        const rangeMatch = trimmedSet.match(/(\d+)-(\d+)周/);
-        const singleMatch = trimmedSet.match(/^(\d+)周/);
-
-        let start = 0, end = 0, processed = false;
-
-        if (rangeMatch) {
-            start = Number(rangeMatch[1]);
-            end = Number(rangeMatch[2]);
-            processed = true;
-        } else if (singleMatch) {
-            start = end = Number(singleMatch[1]);
-            processed = true;
-        }
+    let weekRanges = weekStr.split(',');
+    
+    weekRanges.forEach(range => {
+        let isSingle = range.includes('(单)');
+        let isDouble = range.includes('(双)');
+        let match = range.match(/(\d+)-(\d+)/);
         
-        if (processed) {
-            const isSingle = trimmedSet.includes('(单)');
-            const isDouble = trimmedSet.includes('(双)');
-
-            for (let w = start; w <= end; w++) {
-                if (isSingle && w % 2 === 0) continue;
-                if (isDouble && w % 2 !== 0) continue;
-                weeks.push(w);
+        if (match) {
+            let start = parseInt(match[1]);
+            let end = parseInt(match[2]);
+            for (let i = start; i <= end; i++) {
+                if (isSingle && i % 2 === 0) continue;
+                if (isDouble && i % 2 !== 0) continue;
+                weeks.push(i);
+            }
+        } else {
+            let singleMatch = range.match(/(\d+)/);
+            if (singleMatch) {
+                weeks.push(parseInt(singleMatch[1]));
             }
         }
-    }
+    });
+    
     return [...new Set(weeks)].sort((a, b) => a - b);
 }
 
-function parseJsonData(jsonData) {
-    if (!jsonData || !Array.isArray(jsonData.kbList)) return [];
-
-    const rawCourseList = jsonData.kbList;
-    const initialCourseList = [];
-
-    for (const rawCourse of rawCourseList) {
-        if (!rawCourse.kcmc || !rawCourse.xm || !rawCourse.cdmc || 
-            !rawCourse.xqj || !rawCourse.jcs || !rawCourse.zcd) {
-            continue;
-        }
-
-        const weeksArray = parseWeeks(rawCourse.zcd);
-        if (weeksArray.length === 0) continue;
-        
-        const sectionParts = rawCourse.jcs.split('-');
-        const startSection = Number(sectionParts[0]);
-        const endSection = Number(sectionParts[sectionParts.length - 1]);
-        const day = Number(rawCourse.xqj);
-        
-        if (isNaN(day) || isNaN(startSection) || isNaN(endSection) || 
-            day < 1 || day > 7 || startSection > endSection) {
-            continue;
-        }
-
-        initialCourseList.push({
-            name: rawCourse.kcmc.trim(),
-            teacher: rawCourse.xm.trim(),
-            position: rawCourse.cdmc.trim(),
-            day: day,
-            startSection: startSection,
-            endSection: endSection,
-            weeks: weeksArray
-        });
-    }
-
-    return mergeAndDistinctCourses(initialCourseList);
-}
-
-async function promptUserToStart() {
-    return await window.shiguangBridgePromise.showAlert(
-        "教务系统课表导入",
-        "导入前请确保您已在浏览器中成功登录教务系统",
-        "好的，开始导入"
-    );
-}
-
-// 【修改点 1】修改为河北石油职业技术大学教务网地址
-async function fetchAcademicOptions() {
-    const url = "http://jwc.jw.hebpu.edu.cn/jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151";
+function parseSections(sectionStr) {
+    let sections = [];
+    if (!sectionStr) return sections;
     
+    let parts = sectionStr.split('-');
+    if (parts.length === 2) {
+        let start = parseInt(parts[0]);
+        let end = parseInt(parts[1]);
+        for (let i = start; i <= end; i++) {
+            sections.push(i);
+        }
+    } else if (parts.length === 1 && !isNaN(parseInt(parts[0]))) {
+        sections.push(parseInt(parts[0]));
+    }
+    
+    return sections;
+}
+
+function scheduleHtmlParser(htmlString) {
+    let result = [];
+    let jsonData = null;
+
+    // 1. 尝试直接解析 JSON 格式
     try {
-        const response = await fetch(url, {
-            method: "GET",
-            credentials: "include"
-        });
-
-        if (!response.ok) return null;
-
-        const htmlText = await response.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(htmlText, "text/html");
-
-        const allYearOptions = Array.from(doc.querySelectorAll("#xnm option"))
-            .filter(opt => opt.value !== "")
-            .map(opt => ({
-                value: opt.value,
-                text: opt.textContent.trim(),
-                selected: opt.selected
-            }));
-
-        const semesterOptions = Array.from(doc.querySelectorAll("#xqm option"))
-            .filter(opt => opt.value !== "")
-            .map(opt => ({
-                value: opt.value,
-                text: opt.textContent.trim(),
-                selected: opt.selected
-            }));
-
-        if (allYearOptions.length === 0 || semesterOptions.length === 0) return null;
-
-        const selectedIndex = allYearOptions.findIndex(opt => opt.selected);
-        const start = Math.max(0, (selectedIndex === -1 ? 0 : selectedIndex) - 2);
-        const end = Math.min(allYearOptions.length, (selectedIndex === -1 ? 0 : selectedIndex) + 3);
-
-        return {
-            yearOptions: allYearOptions.slice(start, end),
-            semesterOptions,
-            defaultYearIndex: selectedIndex !== -1 ? selectedIndex - start : 0,
-            defaultSemesterIndex: Math.max(0, semesterOptions.findIndex(opt => opt.selected))
-        };
-
+        jsonData = typeof htmlString === 'string' ? JSON.parse(htmlString) : htmlString;
     } catch (e) {
-        return null;
-    }
-}
-
-async function selectAcademicYearAndSemester() {
-    const optionsData = await fetchAcademicOptions();
-
-    if (!optionsData) {
-        window.shiguangBridge.showToast("读取学年学期失败，请确保您已登录教务系统。");
-        return null;
+        // 如果 htmlString 包含 HTML 包装，尝试正则提取 JSON
+        let match = htmlString.match(/var\ |let\ |const\ )?kbList\s*=\s*(\[\{.*?\}\]);/s) || htmlString.match(/(\[\{"cdmc".*?\}\])/s);
+        if (match && match[1]) {
+            try {
+                jsonData = { kbList: JSON.parse(match[1]) };
+            } catch (err) {}
+        }
     }
 
-    const { yearOptions, semesterOptions, defaultYearIndex, defaultSemesterIndex } = optionsData;
+    // 2. 提取 JSON 中的 kbList 数据
+    if (jsonData) {
+        let list = jsonData.kbList || (jsonData.data && jsonData.data.kbList);
+        if (Array.isArray(list) && list.length > 0) {
+            list.forEach(item => {
+                let name = item.kcmc || item.kcmc_mc || "";
+                let teacher = item.xm || item.jsxm || "";
+                let position = item.cdmc || item.cdmc_mc || "";
+                let day = parseInt(item.xqj || item.xqj_mc) || 1;
+                let weeks = parseWeeks(item.zcd || item.zcd_mc || "");
+                let sections = parseSections(item.jcs || item.jcs_mc || "");
 
-    const yearTexts = yearOptions.map(item => item.text);
-    const yearIndex = await window.shiguangBridgePromise.showSingleSelection(
-        "选择学年",
-        JSON.stringify(yearTexts),
-        defaultYearIndex
-    );
+                if (name && weeks.length > 0 && sections.length > 0) {
+                    result.push({
+                        name: name.trim(),
+                        teacher: teacher.trim(),
+                        position: position.trim(),
+                        day: day,
+                        weeks: weeks,
+                        sections: sections
+                    });
+                }
+            });
+            return result;
+        }
+    }
 
-    if (yearIndex === null || yearIndex === -1) return null;
-
-    const semesterTexts = semesterOptions.map(item => item.text);
-    const semesterIndex = await window.shiguangBridgePromise.showSingleSelection(
-        "选择学期",
-        JSON.stringify(semesterTexts),
-        defaultSemesterIndex
-    );
-
-    if (semesterIndex === null || semesterIndex === -1) return null;
-
-    return {
-        academicYear: yearOptions[yearIndex].value,
-        semesterCode: semesterOptions[semesterIndex].value
-    };
-}
-
-// 【修改点 2】修改为河北石油职业技术大学获取课表的接口
-async function fetchAndParseCourses(academicYear, semesterCode) {
-    const requestBody = `xnm=${academicYear}&xqm=${semesterCode}&kzlx=ck&xsdm=&kclbdm=`;
-    const targetUrl = "http://jwc.jw.hebpu.edu.cn/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2151";
-
+    // 3. 兜底方案：解析标准正方 kbtable DOM 表格
     try {
-        const courseResponse = await fetch(targetUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-            },
-            body: requestBody,
-            credentials: "include"
-        });
+        let parser = new DOMParser();
+        let doc = parser.parseFromString(htmlString, 'text/html');
+        let tds = doc.querySelectorAll('table#kbtable td');
 
-        if (courseResponse.ok) {
-            const jsonText = await courseResponse.text();
-            const jsonData = JSON.parse(jsonText);
-            if (jsonData && jsonData.kbList) {
-                const parsedCourses = parseJsonData(jsonData);
-                if (parsedCourses.length > 0) {
-                    return {
-                        courses: parsedCourses,
-                        config: { semesterTotalWeeks: 20 }
-                    };
+        tds.forEach(td => {
+            let text = td.textContent || "";
+            if (text.trim().length > 5) {
+                let day = parseInt(td.getAttribute('xq')) || 1;
+                let jcs = td.getAttribute('jcs') || "";
+                let sections = parseSections(jcs);
+
+                // 正方表格文本拆分
+                let lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+                if (lines.length >= 2) {
+                    result.push({
+                        name: lines[0],
+                        teacher: lines[1] || "",
+                        position: lines[3] || lines[2] || "",
+                        day: day,
+                        weeks: parseWeeks(lines[2] || ""),
+                        sections: sections
+                    });
                 }
             }
-        }
+        });
     } catch (e) {}
 
-    window.shiguangBridge.showToast("未能获取课表数据，请检查网络或登录状态。");
-    return null;
+    return result;
 }
 
-async function saveCourses(parsedCourses) {
-    try {
-        await window.shiguangBridgePromise.saveImportedCourses(JSON.stringify(parsedCourses));
-        return true;
-    } catch (error) {
-        window.shiguangBridge.showToast(`课程保存失败: ${error.message}`);
-        return false;
-    }
-}
-
-async function runImportFlow() {
-    const alertConfirmed = await promptUserToStart();
-    if (!alertConfirmed) return;
-
-    const selection = await selectAcademicYearAndSemester();
-    if (!selection) return;
-
-    const { academicYear, semesterCode } = selection;
-
-    const result = await fetchAndParseCourses(academicYear, semesterCode);
-    if (result === null) return;
-
-    const { courses, config } = result;
-
-    const saveResult = await saveCourses(courses);
-    if (!saveResult) return;
-
-    try {
-        await window.shiguangBridgePromise.saveCourseConfig(JSON.stringify(config));
-    } catch (e) {}
-
-    window.shiguangBridge.showToast(`课程导入成功，共导入 ${courses.length} 门课程！`);
-    window.shiguangBridge.notifyTaskCompletion();
-}
